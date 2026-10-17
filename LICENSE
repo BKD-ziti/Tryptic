@@ -1,0 +1,36 @@
+Tryptic Source-Available License
+Copyright (c) 2026 BKDziti LLC. All rights reserved.
+
+Tryptic (the software, its source code, documentation, presets, name, and visual identity, together "the
+Software") is the intellectual property of BKDziti LLC. Publishing the source code does not transfer ownership
+and does not place the Software in the public domain or under an open-source license.
+
+1. What you may do
+   You may download, read, run, and modify the Software for your own personal, non-commercial use.
+   Videos you make with the Software are yours.
+
+2. What you may not do without written permission from BKDziti LLC
+   a. sell, license, rent, or otherwise charge for the Software or any modified version of it;
+   b. offer the Software, or anything built on it, as a paid product or as a hosted or online service;
+   c. redistribute the Software or a modified version of it, in whole or in part, except as a fork on GitHub
+      that keeps this license and copyright notice intact and is used only as allowed in section 1;
+   d. remove or change this license, the copyright notice, or the BKDziti attribution;
+   e. use the names "Tryptic" or "BKDziti", or their logos, to name or promote another product.
+
+3. Commercial rights
+   BKDziti LLC keeps the sole right to sell, license, and commercially exploit the Software. For commercial
+   licensing, contact BKDziti LLC.
+
+4. Contributions
+   If you submit a contribution (for example a pull request), you agree that BKDziti LLC may use, modify, and
+   distribute it as part of the Software under any terms, including commercial ones.
+
+5. Third-party software
+   The Software downloads and uses third-party components (such as FFmpeg, PyTorch, torchvision model weights,
+   OpenCV, and Gradio) that are covered by their own licenses. This license does not apply to them.
+
+6. No warranty
+   The Software is provided "as is", without warranty of any kind. In no event will BKDziti LLC be liable for
+   any claim, damages, or other liability arising from the Software or its use.
+
+Any use not expressly allowed above is reserved by BKDziti LLC.

@@ -1,0 +1,10 @@
+# start.bat installs all of this for you (and picks the right PyTorch build for your GPU).
+# only needed if you're setting things up by hand:  pip install -r requirements.txt
+# for an NVIDIA GPU, install torch + torchvision from https://pytorch.org first (the CUDA build), then the rest.
+torch
+torchvision
+opencv-python
+numpy
+gradio>=4.40,<7
+imageio-ffmpeg
+pillow

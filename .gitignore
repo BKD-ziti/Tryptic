@@ -1,0 +1,37 @@
+# only the source goes to GitHub. everything below is made on your machine by start.bat or by using the app.
+
+# private python environment (start.bat builds it, ~3 GB)
+labenv/
+.venv/
+venv/
+
+# ffmpeg is downloaded on first run
+ffmpeg/
+
+# renders, frame caches, scratch
+output/
+dream_output/
+mosh_out/
+mosh_work/
+_frames_*/
+*.mp4
+*.mov
+*.mkv
+*.m4v
+*.webm
+*.avi
+
+# python / os / editor clutter
+__pycache__/
+*.py[cod]
+.favicon.png
+*.lnk
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# old copies
+_backup*/
+*.orig.py
