@@ -11,9 +11,11 @@ Drop in a video, pick what happens to it, and take a trip into your own footage.
 Everything runs on your own computer, and none of your video is ever uploaded. The finished video keeps your clip's size, shape, and exact frame rate. HDR footage (like an iPhone shoots) stays HDR, unless you change it.
 
 <p align="center">
-  <a href="https://bkdziti.com/work/tryptic/"><img src="docs/tryptic-reel.jpg" width="300" alt="Tryptic demo reel: DeepDream, Datamosh and ASCII art on driving footage. Click to watch it with sound on bkdziti.com."></a>
-  <br>
-  <sub><a href="https://bkdziti.com/work/tryptic/">▶ watch the reel with sound on bkdziti.com</a></sub>
+
+
+https://github.com/user-attachments/assets/f3736ced-61a9-407e-b4bd-f4faa78e5d1d
+
+
 </p>
 
 ---
