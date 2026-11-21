@@ -21,19 +21,19 @@ if exist labenv\Scripts\python.exe (
   )
 )
 
-rem --- first run: find a python that pytorch supports (3.10 - 3.13)
+rem --- first run: find a python Tryptic supports (3.10 - 3.14, 3.12 preferred)
 set PYCMD=
-for %%V in (3.12 3.11 3.13 3.10) do (
+for %%V in (3.12 3.13 3.11 3.14 3.10) do (
   if not defined PYCMD (
     py -%%V -c "import sys" >nul 2>nul && set "PYCMD=py -%%V"
   )
 )
 if not defined PYCMD (
-  python -c "import sys; assert (3,10)<=sys.version_info[:2]<=(3,13)" >nul 2>nul && set "PYCMD=python"
+  python -c "import sys; assert (3,10)<=sys.version_info[:2]<=(3,14)" >nul 2>nul && set "PYCMD=python"
 )
 if not defined PYCMD (
   echo.
-  echo couldn't find Python 3.10-3.13 on this computer.
+  echo couldn't find Python 3.10-3.14 on this computer.
   echo install Python 3.12 from python.org ^(tick "Add python.exe to PATH"^), then double-click this again.
   echo.
   pause

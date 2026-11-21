@@ -25,7 +25,6 @@ import sys
 from dataclasses import fields
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 import dreamcore as core
@@ -83,7 +82,7 @@ def main():
         dst = Path(args.output) if args.output else Path(args.out_dir) / (Path(args.input).stem + "_preview.png")
         dst = dst if dst.suffix.lower() == ".png" else dst.with_suffix(".png")
         dst.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(dst), np.hstack([small, out]))
+        core.media.imwrite(dst, np.hstack([small, out]))
         print(f"saved {dst} (left: original, right: dream)")
         return
 

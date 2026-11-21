@@ -12,6 +12,7 @@ only the standard library is used here, so it runs before anything is installed.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,26 @@ ENV_PY = ENV / ("Scripts/python.exe" if IS_WIN else "bin/python")
 GPU_MARKER = ENV / ".gpu_tried"          # so we only try the GPU install once, not on every launch
 
 CUDA_BUILDS = ["cu128", "cu126", "cu124", "cu121"]   # newest first; older ones need older drivers
-OTHER_PACKAGES = {"cv2": "opencv-python", "numpy": "numpy", "gradio": "gradio>=4.40,<7", "imageio_ffmpeg": "imageio-ffmpeg", "PIL": "pillow"}
+PY_MIN, PY_MAX = (3, 10), (3, 14)       # pytorch + the pinned packages all have windows builds for these
+MODULE_OF = {"opencv-python": "cv2", "numpy": "numpy", "gradio": "gradio", "imageio-ffmpeg": "imageio_ffmpeg",
+             "pillow": "PIL"}
+
+
+def other_packages():
+    """{import name: [pip specs]} from requirements.txt, so the pins live in one place. torch is handled separately."""
+    out = {}
+    try:
+        lines = (HERE / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = list(MODULE_OF)                 # no requirements.txt: unpinned, better than nothing
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name = re.split(r"[=<>!~;\s\[]", line, maxsplit=1)[0].lower()
+        if name in MODULE_OF:
+            out.setdefault(MODULE_OF[name], []).append(line)
+    return out
 
 
 def say(msg=""):
@@ -100,9 +120,11 @@ def ensure_packages():
         say("\nPyTorch still won't load. copy everything in this window into an issue on the GitHub page.")
         sys.exit(1)
 
-    missing = [pkg for mod, pkg in OTHER_PACKAGES.items() if quiet([sys.executable, "-c", f"import {mod}"]).returncode != 0]
+    wanted = other_packages()
+    missing = [spec for mod, specs in wanted.items() if quiet([sys.executable, "-c", f"import {mod}"]).returncode != 0
+               for spec in specs]
     if missing:
-        say(f"installing {', '.join(missing)}...")
+        say(f"installing {', '.join(sorted({re.split(r'[=<>!~;]', m)[0] for m in missing}))}...")
         if pip("install", *missing).returncode != 0:
             say("\nsome packages failed to install. check your internet connection and run start.bat again.")
             sys.exit(1)
@@ -120,8 +142,9 @@ def main():
             say("the old environment is broken. rebuilding it...")
             shutil.rmtree(ENV, ignore_errors=True)
         if not ENV_PY.exists():
-            if not ((3, 10) <= sys.version_info[:2] <= (3, 13)):
-                say(f"this python is {sys.version.split()[0]}, and PyTorch needs 3.10 to 3.13. install Python 3.12 from python.org.")
+            if not (PY_MIN <= sys.version_info[:2] <= PY_MAX):
+                say(f"this python is {sys.version.split()[0]}, and Tryptic needs 3.10 to 3.14. "
+                    "install Python 3.12 from python.org (scroll down to 'looking for a specific release').")
                 sys.exit(1)
             say("first run: creating a private python environment...")
             venv.create(ENV, with_pip=True)

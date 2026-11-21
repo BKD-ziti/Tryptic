@@ -1,10 +1,15 @@
 # start.bat installs all of this for you (and picks the right PyTorch build for your GPU).
 # only needed if you're setting things up by hand:  pip install -r requirements.txt
 # for an NVIDIA GPU, install torch + torchvision from https://pytorch.org first (the CUDA build), then the rest.
+#
+# everything except torch is pinned to the versions Tryptic was tested with, so a fresh install gets the
+# same thing that was tested, not whatever came out last week. launcher.py reads its pins from this file.
+# supported python: 3.10 to 3.14 (3.12 recommended).
 torch
 torchvision
-opencv-python
-numpy
-gradio>=4.40,<7
-imageio-ffmpeg
-pillow
+opencv-python==5.0.0.93
+numpy==2.2.6; python_version < "3.11"
+numpy==2.3.5; python_version >= "3.11"
+gradio==6.30.0
+imageio-ffmpeg==0.6.0
+pillow==12.3.0

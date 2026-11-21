@@ -351,6 +351,16 @@ def pick_device():
     return torch.device("cpu")
 
 
+def weights_download(model_name):
+    """None if the network's weights are already on this computer, else their size in MB (they download once)."""
+    try:
+        w = models.get_model_weights(model_name).DEFAULT
+        f = Path(torch.hub.get_dir()) / "checkpoints" / os.path.basename(w.url)
+        return None if f.is_file() else float(w.meta.get("_file_size") or 0)
+    except Exception:
+        return None
+
+
 _DREAMERS = {}
 
 
@@ -492,52 +502,29 @@ def find_ffmpeg(hint="ffmpeg"):
 # video in -> dreamed video out
 # --------------------------------------------------------------------------------------
 
-def _real_size(cap):
-    """(width, height) of an actually decoded frame, then rewinds. phones store vertical video sideways plus a
-    rotation flag, and the size properties don't always account for it, so the decoded frame is the truth."""
-    pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
-    ok, frame = cap.read()
-    cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-    if ok and frame is not None:
-        return frame.shape[1], frame.shape[0]
-    return int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-
-def source_rate(src, cap=None):
-    """the clip's exact frame rate as a Fraction. ffmpeg's view first (header + measured timestamps), opencv's only
-    if there's no ffmpeg. raises instead of guessing: a wrong default here was silently changing output frame rates."""
-    ff = find_ffmpeg()
-    if ff:
-        return media.probe_rate(ff, src)
-    own = cap is None
-    cap = cap or cv2.VideoCapture(str(src))
-    try:
-        f = cap.get(cv2.CAP_PROP_FPS)
-    finally:
-        if own:
-            cap.release()
-    if not f or not (0.5 < f <= 1000):
-        raise RuntimeError("couldn't read this clip's frame rate (and there's no ffmpeg to ask). type one into the frame rate box.")
-    return dict(fps=media.snap(f), how="opencv", vfr=False, header=f)
-
-
 def out_rate(P, src_rate):
     """exact output rate: the box if it's lower than the source's, else the source's own exact rate."""
     src = float(src_rate)
     return media.typed_rate(P.fps) if 0 < P.fps < src - 0.01 else src_rate
 
 
+def _need_ffmpeg(hint="ffmpeg"):
+    ff = find_ffmpeg(hint)
+    if not ff:
+        raise RuntimeError("ffmpeg not found. install imageio-ffmpeg (pip install imageio-ffmpeg) or put ffmpeg on your PATH.")
+    return ff
+
+
 def video_info(src):
-    cap = cv2.VideoCapture(str(src))
-    if not cap.isOpened():
-        raise RuntimeError(f"couldn't open {src}")
-    ra = source_rate(src, cap)
+    """everything is read with ffmpeg (opencv can't open some files, and on windows it can't open paths with
+    non-English characters in them)."""
+    ff = _need_ffmpeg()
+    ra = media.probe_rate(ff, src)
     fps = float(ra["fps"])
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    ow, oh = _real_size(cap)
-    cap.release()
-    return dict(fps=fps, fps_exact=ra["fps"], vfr=ra["vfr"], fps_how=ra["how"], total=total,
-                width=ow, height=oh, seconds=(total / fps if total else 0))
+    secs = media.clip_duration(ff, src)
+    ow, oh = media.decoded_size(ff, src)
+    return dict(fps=fps, fps_exact=ra["fps"], vfr=ra["vfr"], fps_how=ra["how"], total=int(round(secs * fps)),
+                width=ow, height=oh, seconds=secs)
 
 
 def param_hash(P, src, plan, color_sig=""):
@@ -573,24 +560,18 @@ def iter_render(src, P, dreamer, out_dir="dream_output", ffmpeg_hint="ffmpeg", k
     finished frames are kept on disk, so re-running the same settings resumes where it stopped."""
     src, out_dir = Path(src), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    ffmpeg = find_ffmpeg(ffmpeg_hint)
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg not found. install imageio-ffmpeg (pip install imageio-ffmpeg) or put ffmpeg on your PATH.")
+    ffmpeg = _need_ffmpeg(ffmpeg_hint)
     cplan = media.color_plan(ffmpeg, src, color_mode, log=log)
-    cap = cv2.VideoCapture(str(src))                                 # only used for the frame count now
-    if not cap.isOpened():
-        raise RuntimeError(f"couldn't open {src}")
     reader = None
     try:
-        ra = source_rate(src, cap)
+        ra = media.probe_rate(ffmpeg, src)
         src_rate = ra["fps"]                                         # exact, e.g. 30000/1001
         src_fps = float(src_rate)
         out_r = out_rate(P, src_rate)                                # can't go above the source's rate
         fps = float(out_r)
         step = src_fps / fps                                         # source frames per output frame (>= 1)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-        ow, oh = media.decoded_size(ffmpeg, src)
+        total = int(round(media.clip_duration(ffmpeg, src) * src_fps))   # for the progress count only
+        ow, oh = media.decoded_size(ffmpeg, src)                     # also fails clearly if ffmpeg can't read it
         plan = plan_size(ow, oh, P)
         (DW, DH), (W, H), fit = plan["dream"], plan["out"], plan["fit"]
 
@@ -611,15 +592,14 @@ def iter_render(src, P, dreamer, out_dir="dream_output", ffmpeg_hint="ffmpeg", k
         reader = media.read_frames(ffmpeg, src, cplan, start=P.start, fps=out_r if step > 1.0001 else None,
                                    length=P.length, size=(ow, oh))
         for frame in reader:
-            if n is not None and idx >= n:
+            if want is not None and idx >= want:          # the reader stops at the end of the clip by itself
                 break
             small = fit_frame(frame, DW, DH, fit)
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             path = frames_dir / f"{idx:06d}.png"
 
-            if path.exists():
-                dreamed = cv2.imread(str(path))
-            else:
+            dreamed = media.imread(path) if path.exists() else None    # a frame finished on an earlier run
+            if dreamed is None:
                 if prev_gray is not None and cv2.absdiff(gray, prev_gray).mean() > P.cut:
                     prev_dream = None                      # hard cut: don't drag the old scene along
                 if prev_dream is None or P.blend <= 0:
@@ -629,18 +609,17 @@ def iter_render(src, P, dreamer, out_dir="dream_output", ffmpeg_hint="ffmpeg", k
                     init = cv2.addWeighted(carried, P.blend, small, 1 - P.blend, 0)
                     steps = follow_steps
                 dreamed = _finish(to_bgr8(dreamer.dream(to_rgb01(init), P, steps=steps)), small, P)
-                cv2.imwrite(str(path), dreamed)
+                media.imwrite(path, dreamed)
                 done += 1
 
             content = (dreamed.shape[1], dreamed.shape[0])
             prev_dream, prev_gray = dreamed, gray
             idx += 1
             per = (time.time() - t0) / done if done else 0.0
-            left = per * (n - idx) if (n is not None and done) else None
+            left = per * max(0, n - idx) if (n is not None and done) else None
             yield dict(kind="frame", idx=idx, total=n, image=media.preview_rgb(dreamed, cplan, bgr=True),
                        source=small, per=per, eta=left)
     finally:
-        cap.release()
         if reader is not None:
             reader.close()
 

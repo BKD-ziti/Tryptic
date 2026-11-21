@@ -168,6 +168,54 @@ def verify_output(ff, path, want, log=print):
     return ok
 
 
+def clip_duration(ff, path):
+    """seconds of video in the clip (0.0 if it can't be read). ffprobe first, then the `ffmpeg -i` text."""
+    fp = ffprobe_for(ff)
+    if fp:
+        try:
+            r = _run([fp, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=duration:format=duration",
+                      "-of", "json", str(path)])
+            j = json.loads(r.stdout or "{}")
+            for v in [(j.get("streams") or [{}])[0].get("duration"), (j.get("format") or {}).get("duration")]:
+                try:
+                    if v not in (None, "N/A") and float(v) > 0:
+                        return float(v)
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+    try:
+        t = _run([ff, "-hide_banner", "-i", str(path)]).stderr
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", t)
+        if m:
+            return int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+    except Exception:
+        pass
+    return 0.0
+
+
+# ---- image files. cv2.imread / cv2.imwrite can't handle non-English characters in a path on windows (a user
+# ---- folder like C:\Users\José\...), so files go through numpy, which can.
+def imwrite(path, img):
+    import cv2
+    ext = Path(path).suffix or ".png"
+    ok, buf = cv2.imencode(ext, img)
+    if not ok:
+        raise RuntimeError(f"couldn't encode an image for {path}")
+    buf.tofile(str(path))
+    return True
+
+
+def imread(path):
+    import numpy as np
+    import cv2
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
+
+
 def thumbnail(ff, path, at=0.0, width=640, plan=None):
     """one frame of the clip as an RGB numpy array (for the preview), or None. with a color plan it's decoded
     with the right color math and HDR is squeezed into something that reads right on a normal screen."""
@@ -441,3 +489,66 @@ def color_check(ff, path, plan, log=print):
     log(("color check: " + describe_color(c) + (" (as planned)" if ok else "")) if ok else
         f"color check: the file says {describe_color(c)}, expected {o['matrix']}/{o['primaries']}/{o['trc']}")
     return ok
+
+
+# ---- the in-app player. browsers only reliably play 8-bit H.264 in an mp4. HDR renders are 10-bit HEVC, which
+# ---- many browsers can't play (and gradio "fixes" it into 10-bit H.264, which they can't play either). so the
+# ---- player gets a small standard-color copy. the real file in the output folder is never touched.
+
+def _stream_codec(ff, path):
+    """(codec, pix_fmt, width, height) of the first video stream, or Nones."""
+    fp = ffprobe_for(ff)
+    if fp:
+        try:
+            r = _run([fp, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                      "stream=codec_name,pix_fmt,width,height", "-of", "json", str(path)])
+            st = (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
+            return st.get("codec_name"), st.get("pix_fmt"), st.get("width"), st.get("height")
+        except Exception:
+            pass
+    try:
+        line = next((l for l in _run([ff, "-hide_banner", "-i", str(path)]).stderr.splitlines() if "Video:" in l), "")
+        codec = re.search(r"Video:\s*(\w+)", line)
+        pix = re.search(r"\b(yuv\w+|nv12|p010\w*)\b", line)
+        sz = re.search(r"(?<!\w)(\d{2,5})x(\d{2,5})(?=[\s,\[])", line)
+        return (codec[1] if codec else None, pix[1] if pix else None,
+                int(sz[1]) if sz else None, int(sz[2]) if sz else None)
+    except Exception:
+        return None, None, None, None
+
+
+def needs_player_preview(ff, path):
+    codec, pix, _, _ = _stream_codec(ff, path)
+    return not (Path(path).suffix.lower() == ".mp4" and codec == "h264" and pix in ("yuv420p", "yuvj420p"))
+
+
+def player_preview(ff, path, out_dir, short=720, keep=6, log=None):
+    """path itself if a browser can already play it, else a small 8-bit H.264 SDR copy for the player.
+    never raises: if the copy can't be made, the original is returned."""
+    try:
+        if not needs_player_preview(ff, path):
+            return str(path)
+        _, _, w, h = _stream_codec(ff, path)
+        plan = color_plan(ff, path, "sdr")            # tone-maps HDR to bt709 when this ffmpeg can
+        vf = [plan["decode"]]
+        if w and h and min(w, h) > short:
+            k = short / min(w, h)
+            vf.append(f"scale={max(2, int(round(w * k / 2)) * 2)}:{max(2, int(round(h * k / 2)) * 2)}:flags=bicubic")
+        vf += ["format=yuv420p", _setparams(plan["out"])]
+        folder = Path(out_dir) / "_player_previews"
+        folder.mkdir(parents=True, exist_ok=True)
+        dst = folder / (Path(path).stem + "_preview.mp4")
+        cmd = [ff, "-y", "-v", "error", "-i", str(path), "-map", "0:v:0", "-map", "0:a:0?", "-vf", ",".join(vf),
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"] + out_tags(plan)
+        cmd += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(dst)]
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", **NOWIN)
+        if r.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
+            if log:
+                log("couldn't make the player preview, showing the real file instead")
+            return str(path)
+        old = sorted(folder.glob("*_preview.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)[keep:]
+        for p in old:                                  # only the last few previews are kept
+            p.unlink(missing_ok=True)
+        return str(dst)
+    except Exception:
+        return str(path)

@@ -151,10 +151,20 @@ def _favicon():
             img[:] = (43, 23, 20)
             cv2.circle(img, (26, 32), 17, (159, 87, 226), 7, cv2.LINE_AA)
             cv2.circle(img, (38, 32), 17, (144, 199, 76), 7, cv2.LINE_AA)
-            cv2.imwrite(str(p), img)
+            media.imwrite(p, img)
         return str(p)
     except Exception:
         return None
+
+
+def _no_download():
+    """no download button on the result player: it may be the small preview, not the real file."""
+    params = inspect.signature(gr.Video.__init__).parameters
+    if "buttons" in params:
+        return {"buttons": []}
+    if "show_download_button" in params:
+        return {"show_download_button": False}
+    return {}
 
 
 def _launch_kwargs():
@@ -409,6 +419,12 @@ def on_still(mode, clip, file, typed, *vals):
 
 
 RUN_LOCK = threading.Lock()                   # one render at a time (manual or queued): they'd fight over the GPU
+MOSH_BG = {"t": None}                         # the datamosh thread. it can't be interrupted, so a stopped one finishes
+
+
+def mosh_still_running():
+    t = MOSH_BG["t"]
+    return t is not None and t.is_alive()
 
 
 def run_render(mode, clip, d, b_path, say, cancelled=lambda: False):
@@ -427,7 +443,13 @@ def run_render(mode, clip, d, b_path, say, cancelled=lambda: False):
 
     if mode == "dream":
         P = dream_params(d, clip)
-        yield "frame", None, "loading network…"
+        mb = core.weights_download(P.model) if core.torch is not None else None
+        if mb is not None:
+            msg = f"downloading the {P.model} network, one time only" + (f" (about {mb:.0f} MB)" if mb else "") + "…"
+            say(msg)
+            yield "frame", None, msg
+        else:
+            yield "frame", None, "loading network…"
         dreamer = core.get_dreamer(P.model)
         gen = core.iter_render(src, P, dreamer, out_dir=OUT_DIR, color_mode=d["color_out"], log=say)
         try:
@@ -463,7 +485,10 @@ def run_render(mode, clip, d, b_path, say, cancelled=lambda: False):
                     yield "frame", ev["image"], f"frame {ev['idx']}/{tot}  ·  {ev['per'] * 1000:.0f} ms per frame{eta}"
                 else:
                     final, final_rate, cplan = ev["path"], ev["fps"], ev.get("color")
-                    say(f"characters drawn on: {ev['device']}  ·  encoded on the " + ("GPU (NVENC)" if ev["gpu_encode"] else "CPU (x264)"))
+                    hdr = bool((ev.get("color") or {}).get("hdr"))
+                    enc = (("GPU (NVENC HEVC 10-bit)" if hdr else "GPU (NVENC)") if ev["gpu_encode"]
+                           else ("CPU (x265 10-bit)" if hdr else "CPU (x264)"))
+                    say(f"characters drawn on: {ev['device']}  ·  encoded on the {enc}")
                     if ev.get("note"):
                         say("note: " + ev["note"])
         finally:
@@ -489,6 +514,7 @@ def run_render(mode, clip, d, b_path, say, cancelled=lambda: False):
             state["done"] = True
 
         t = threading.Thread(target=work, daemon=True)
+        MOSH_BG["t"] = t                          # if the render is stopped, this keeps going until it's done
         t.start()
         while not state["done"]:
             time.sleep(0.4)
@@ -511,6 +537,9 @@ def on_render(mode, clip, file, typed, file_b, *vals):
     """a generator: streams (preview image, status, result video path, log text)."""
     if not clip:
         raise gr.Error("drop a video in first")
+    if mosh_still_running() and not RUN_LOCK.locked():
+        raise gr.Error("a datamosh you stopped is still finishing in the background (it can't be cut off mid-way). "
+                       "give it a few seconds and press render again.")
     if not RUN_LOCK.acquire(blocking=False):
         raise gr.Error("the render queue is using the GPU right now. add this to the queue instead, "
                        "or stop the queue first.")
@@ -527,7 +556,14 @@ def on_render(mode, clip, file, typed, file_b, *vals):
             if kind == "frame":
                 yield a, status, None, logtxt()
             else:
-                yield None, status, a, logtxt()
+                shown = a
+                if media.needs_player_preview(FF["path"], a):
+                    yield None, "making a quick preview for the player…", None, logtxt()
+                    shown = media.player_preview(FF["path"], a, OUT_DIR, log=say)
+                    if shown != a:
+                        say("the player shows a small standard-color preview so any browser can play it. "
+                            "the real file (full size, original color) is in the output folder.")
+                yield None, status, shown, logtxt()
     except gr.Error:
         raise
     except Exception as e:
@@ -621,6 +657,9 @@ class RenderQueue:
                 if RUN_LOCK.locked():
                     self.status = f"job {job['id']} is waiting for the render that's going now to finish"
                 with RUN_LOCK:                   # waits politely if a manual render is going
+                    if mosh_still_running():     # a stopped datamosh is still finishing
+                        self.status = f"job {job['id']} is waiting for a stopped datamosh to finish"
+                        MOSH_BG["t"].join()
                     self._run_job(job)
                 ran += 1
         finally:
@@ -972,7 +1011,8 @@ def build_ui():
                     open_btn = gr.Button("open output folder")
                 status = gr.Textbox(label="status", interactive=False, max_lines=2)
                 image = gr.Image(label="preview", interactive=False)
-                video_out = gr.Video(label="result", interactive=False)
+                video_out = gr.Video(label="result (preview. the real file is in the output folder)", interactive=False,
+                                     **_no_download())
                 log = gr.Textbox(label="what it did", interactive=False, lines=8)
 
                 # ---- render queue --------------------------------------------------------------
